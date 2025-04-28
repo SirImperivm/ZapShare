@@ -18,14 +18,15 @@ class ZapShareApp:
     def __init__(self, root=None):
         self.config_file = "zapshare_config.json"
         self.config = self.load_config()
-        
+
         # Inizializza sender e receiver
         self.sender = Sender()
         self.receiver = None
-        
+        self.tray_icon = None  # Inizializza la variabile tray_icon
+
         # Registro del trasferimento
         self.transfer_history = []
-        
+
         # Finestra principale
         if root:
             self.root = root
@@ -34,15 +35,18 @@ class ZapShareApp:
             self.root.title("ZapShare")
             self.root.geometry("800x600")
             self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-            
+
             # Icona dell'applicazione (se disponibile)
             try:
                 self.root.iconbitmap("zapshare_icon.ico")
             except:
                 pass
-        
+
         self.setup_ui()
-        
+
+        # Crea subito l'icona nella system tray
+        self.create_tray_icon()
+
         # Se è la prima esecuzione, mostra la finestra di configurazione
         if not os.path.exists(self.config_file) or "first_run" not in self.config:
             self.show_first_time_setup()
@@ -696,9 +700,12 @@ class ZapShareApp:
 
     def create_tray_icon(self):
         """Crea un'icona nella system tray"""
+        if self.tray_icon is not None:
+            return  # Evita di creare un'altra icona se esiste già
+
         # Per semplicità, creiamo un'immagine come icona
-        icon_image = Image.new('RGB', (64, 64), color = (0, 120, 215))
-        
+        icon_image = Image.new('RGB', (64, 64), color=(0, 120, 215))
+
         menu = (
             pystray.MenuItem('Mostra ZapShare', self.show_window),
             pystray.MenuItem('Invia File', self.show_window_send),
@@ -706,8 +713,13 @@ class ZapShareApp:
             pystray.MenuItem('Esci', self.quit_app)
         )
 
+        # Crea l'icona ma non avviarla ancora
         self.tray_icon = pystray.Icon("ZapShare", icon_image, "ZapShare", menu)
-        self.tray_icon.run_detached()
+
+        # Avvia l'icona in un thread separato
+        tray_thread = threading.Thread(target=self.tray_icon.run)
+        tray_thread.daemon = True  # Importante per permettere la chiusura del programma
+        tray_thread.start()
 
     def show_window(self, icon=None, item=None):
         """Mostra la finestra principale dalla system tray"""
@@ -727,8 +739,9 @@ class ZapShareApp:
         # Nascondi la finestra invece di chiuderla
         self.root.withdraw()
 
-        # Crea l'icona nella system tray
-        self.create_tray_icon()
+        # Assicurati che l'icona nella system tray sia già creata
+        if self.tray_icon is None:
+            self.create_tray_icon()
 
     def quit_app(self, icon=None, item=None):
         """Esce completamente dall'applicazione"""
@@ -736,36 +749,44 @@ class ZapShareApp:
 
         # Ferma il receiver se è attivo
         if self.receiver and self.receiver.running:
-            self.receiver.stop()
-            self.receiver = None
-
-        # Rimuovi l'icona dalla system tray se esiste
-        if hasattr(self, 'tray_icon') and self.tray_icon:
             try:
-                self.tray_icon.stop()
+                self.receiver.stop()
             except:
-                pass
+                pass  # Ignora eventuali errori nella chiusura
+
+        # Ferma l'icona nella system tray
+        if self.tray_icon:
+            try:
+                # Fermando l'icona dentro quit_app, evita la ricorsione
+                icon_to_stop = self.tray_icon
+                self.tray_icon = None  # Evita cicli
+                icon_to_stop.stop()
+            except:
+                pass  # Ignora eventuali errori
+
+        # Distruggi la finestra root
+        if self.root:
+            try:
+                self.root.quit()  # Ferma il mainloop
+                self.root.destroy()  # Distrugge la finestra
+            except:
+                pass  # Ignora eventuali errori
 
         # Termina tutti i thread non-daemon
-        import threading
-        for thread in threading.enumerate():
-            if thread is not threading.current_thread() and not thread.daemon:
-                try:
-                    thread.join(0.1)  # Dai un breve tempo per chiudersi
-                except:
-                    pass
+        try:
+            for thread in threading.enumerate():
+                if thread is not threading.current_thread() and not thread.daemon:
+                    try:
+                        thread.join(0.5)  # Aspetta brevemente che i thread terminino
+                    except:
+                        pass
+        except:
+            pass
 
-        # Distruggi la finestra principale
-        if hasattr(self, 'root') and self.root:
-            try:
-                self.root.quit()  # Termina il mainloop
-                self.root.destroy()  # Distruggi la finestra
-            except:
-                pass
-
-        # Termina completamente il processo
+        # Termina completamente il processo Python
+        # Questo comando è essenziale per uscire dall'applicazione
         import os
-        os._exit(0)  # Più drastico di sys.exit(), termina immediatamente
+        os._exit(0)  # Più drastico di sys.exit(), forza la chiusura
 
 # Avvio dell'applicazione
 if __name__ == "__main__":
